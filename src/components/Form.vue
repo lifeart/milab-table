@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, toValue } from 'vue'
+import { computed, ref, toValue } from 'vue'
 
 export type Model = {
   cols: number
@@ -11,12 +11,17 @@ export type Model = {
 const props = defineProps<{
   onModelChange: (model: Model) => void
   defaultModel: Model
+  isLoading: boolean
 }>()
 
 const cols = ref(props.defaultModel.cols)
 const rows = ref(props.defaultModel.rows)
 const colSize = ref(props.defaultModel.colSize)
 const rowSize = ref(props.defaultModel.rowSize)
+
+const buttonText = computed(() => {
+  return props.isLoading ? 'Loading...' : 'Generate'
+})
 
 const onSubmit = (e: Event) => {
   e.preventDefault()
@@ -94,7 +99,7 @@ const onSubmit = (e: Event) => {
         type="submit"
         class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
       >
-        Generate
+        {{ buttonText }}
       </button>
     </div>
   </form>

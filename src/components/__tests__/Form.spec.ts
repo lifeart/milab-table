@@ -13,6 +13,7 @@ describe('Form', () => {
           colSize: 36,
           rowSize: 38
         },
+        isLoading: false,
         onModelChange: () => {}
       }
     });
