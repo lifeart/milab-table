@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, toValue, nextTick } from 'vue'
+import { computed, ref, toValue, watch } from 'vue'
 import type { Model } from './Form.vue'
 
 const props = defineProps<{
@@ -9,9 +9,9 @@ const props = defineProps<{
 
 const viewStartIndex = ref(0)
 const viewEndIndex = ref(10)
-const tableScrollHeight = ref(0)
 const container = ref<HTMLDivElement | null>(null)
-const scrollYHolder = ref<HTMLTableRowElement | null>(null)
+const topPusher = ref<HTMLDivElement | null>(null)
+const bottomPusher = ref<HTMLDivElement | null>(null)
 
 const data = computed(() => {
   return props.data
@@ -31,18 +31,16 @@ const rowSize = computed(() => {
 const cols = computed(() => {
   return toValue(model).cols
 })
-const rows = computed(() => {
-  return toValue(model).rows
-})
 
 let timeout: ReturnType<typeof setTimeout> = null as unknown as ReturnType<typeof setTimeout>
 let inScrollHandler = false
 
 const visibleOffset = 10
-const offsetBottom = Math.round(visibleOffset / 2)
+const maxScrollSize = 1000
 
 const scrollModel = {
   isStarted: false,
+  relativeOffset: 0,
   startScrollLeft: 0,
   startScrollTop: 0,
   endScrollLeft: 0,
@@ -51,82 +49,125 @@ const scrollModel = {
 
 const onScrollEnd = () => {
   clearTimeout(timeout)
+
+  let mult = 1
+
+  scrollModel.endScrollTop = container.value?.scrollTop ?? 0
+
+  const realRowSize = props.model.rowSize
+
+  let scrollDiff = scrollModel.startScrollTop - scrollModel.endScrollTop
+
+  const isUpScroll = scrollDiff > 0
+  const scrollRatio = Math.min(Math.abs(scrollDiff) / maxScrollSize, 1)
+  const arraySize = toValue(data).length
+
+  if (scrollRatio > 0.9) {
+    mult = Math.pow(scrollRatio * 10, Math.exp(scrollRatio * 2))
+    scrollDiff = scrollDiff * mult
+  } else if (scrollRatio > 0.6) {
+    mult = Math.pow(scrollRatio * 10, Math.exp(scrollRatio + 0.5))
+    scrollDiff = scrollDiff * mult
+  }
+
+  scrollModel.relativeOffset += scrollDiff
+
   if (!scrollModel.isStarted) {
     return
   }
   if (!container.value) {
     return
   }
-  if (!scrollYHolder.value) {
-    return
-  }
   if (inScrollHandler) {
     return
   }
-  const realRowSize = props.model.rowSize
+
+  const absScrollDiff = Math.min(Math.abs(scrollDiff), arraySize * realRowSize)
+  const scrollForOneRow = maxScrollSize / arraySize
+  const scrolledRows = Math.ceil(absScrollDiff / realRowSize)
 
   inScrollHandler = true
 
-  const node = container.value
-  scrollModel.endScrollLeft = node.scrollLeft
-  scrollModel.endScrollTop = node.scrollTop
-
-  const scrolledRows = Math.round(node.scrollTop / realRowSize)
-  const visibleRows = Math.ceil(container.value.clientHeight / realRowSize)
-
-  let endIndexToSlice = scrolledRows + visibleRows + offsetBottom
-
-  const arraySize = toValue(data).length
-
-  if (endIndexToSlice > arraySize) {
-    endIndexToSlice = arraySize
-  }
-  let startIndexToSlice = Math.max(0, endIndexToSlice - visibleRows - visibleOffset)
-  if (startIndexToSlice === endIndexToSlice) {
-    startIndexToSlice = Math.max(0, visibleRows + visibleOffset)
-  }
-
-  if (viewStartIndex.value === startIndexToSlice || viewEndIndex.value === endIndexToSlice) {
-    inScrollHandler = false
-    scrollModel.isStarted = false
+  if (scrollDiff === 0 || scrolledRows === 0) {
+    requestAnimationFrame(() => {
+      inScrollHandler = false
+      scrollModel.isStarted = false
+    })
     return
   }
 
-  viewStartIndex.value = Math.max(0, startIndexToSlice - (visibleOffset - offsetBottom))
-  viewEndIndex.value = endIndexToSlice
-
-  requestAnimationFrame(() => {
-    if (scrollYHolder.value) {
-      scrollYHolder.value.style.height = `${Math.max(
-        0,
-        scrolledRows * realRowSize - offsetBottom * realRowSize
-      )}px`
-    }
-  })
-
-  const reScrollOffset =
-    container.value.scrollTop + (view.value.length - (visibleOffset - offsetBottom)) * realRowSize
-
-  if (view.value[0].id === 0) {
-    tableScrollHeight.value = 0
-  } else {
-    tableScrollHeight.value = reScrollOffset
+  const rowsFromTop = viewStartIndex.value
+  scrollModel.relativeOffset = -(rowSize.value * rowsFromTop)
+  let startIndex = Math.min(Math.max(0, rowsFromTop + (isUpScroll ? -scrolledRows : scrolledRows)))
+  if (startIndex >= arraySize) {
+    startIndex = arraySize - visibleOffset
   }
+  let endIndex = Math.min(arraySize, startIndex + visibleOffset)
+  viewStartIndex.value = startIndex
+  viewEndIndex.value = endIndex
 
-  nextTick(() => {
+  const scrollRowDiff = parseInt((container.value.scrollTop % realRowSize).toFixed(0), 10)
+
+  if (topPusher.value) {
+    const topOffset = Math.max(
+      (Math.min(rowsFromTop + scrolledRows, arraySize - 1) + 2) * scrollForOneRow - scrollRowDiff,
+      0
+    )
+    const bottomOffset = Math.max(maxScrollSize - topOffset, 0)
+    topPusher.value.style.height = `${topOffset}px`
+    if (bottomPusher.value) {
+      bottomPusher.value.style.height = `${bottomOffset}px`
+    }
+    requestAnimationFrame(() => {
+      inScrollHandler = true
+      scrollModel.isStarted = true
+      requestAnimationFrame(() => {
+        if (container.value) {
+          container.value.scrollTop = topOffset
+        }
+        inScrollHandler = false
+        scrollModel.isStarted = false
+      })
+    })
+  }
+  requestAnimationFrame(() => {
     inScrollHandler = false
     scrollModel.isStarted = false
   })
 }
-const onScroll = () => {
+watch(bottomPusher, () => {
+  if (bottomPusher.value) {
+    bottomPusher.value.style.height = `${maxScrollSize}px`
+  }
+})
+const hasScrollEnd = computed(() => {
+  if (!container.value) {
+    return false
+  }
+  return 'onscrollend' in container.value
+})
+const onScroll = (e?: Event) => {
+  const supportScrollEnd = toValue(hasScrollEnd)
   clearTimeout(timeout)
+  if (e && !e.currentTarget) {
+    if (!supportScrollEnd) {
+      timeout = setTimeout(onScrollEnd, 100)
+    }
+    return
+  }
   if (!container.value) {
     return
   }
   if (inScrollHandler) {
+    if (!supportScrollEnd) {
+      timeout = setTimeout(onScrollEnd, 100)
+    }
     return
   }
   if (scrollModel.isStarted) {
+    if (!supportScrollEnd) {
+      timeout = setTimeout(onScrollEnd, 100)
+    }
     return
   }
   scrollModel.isStarted = true
@@ -137,13 +178,6 @@ const onScroll = () => {
 
 const tableWidth = computed(() => {
   return toValue(cols) * toValue(colSize)
-})
-const tableHeight = computed(() => {
-  let value =
-    toValue(rows) * toValue(rowSize) -
-    toValue(tableScrollHeight) -
-    (container.value?.clientHeight ?? 0)
-  return value < 0 ? 0 : value
 })
 const headers = computed(() => {
   const headers: string[] = ['ID']
@@ -170,7 +204,7 @@ const headers = computed(() => {
           </tr>
         </thead>
         <tbody v-if="view.length">
-          <tr ref="scrollYHolder" class="gradient">
+          <tr ref="topPusher" :style="{ width: '100%' }" class="gradient">
             <td v-bind:colspan="cols"></td>
           </tr>
           <tr v-for="row in view" :key="row.id" :style="{ height: `${rowSize}px` }">
@@ -188,7 +222,7 @@ const headers = computed(() => {
           </tr>
         </tbody>
       </table>
-      <div v-bind:style="{ height: `${tableHeight}px`, width: '100%' }" class="gradient"></div>
+      <div ref="bottomPusher" :style="{ width: '100%' }" class="gradient"></div>
     </div>
   </div>
 </template>
